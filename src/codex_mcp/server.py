@@ -1,159 +1,91 @@
 #!/usr/bin/env python3
-"""Codex MCP Server - Ask OpenAI models for opinions via MCP."""
+"""Codex MCP Server - Call the real Codex CLI (`codex exec`) via MCP."""
 
 import asyncio
 import json
-import os
+import shutil
 import uuid
 from datetime import datetime
-from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
-from openai import AsyncOpenAI
-
-# --- Config: ~/.codex/config.toml > env vars > defaults ---
-
-_DEFAULTS = {
-    "api_base": "https://api.openai.com/v1",
-    "api_key": "",
-    "model": "gpt-4.1",
-    "system_prompt": "You are Codex, a helpful coding assistant. Provide concise, practical advice.",
-}
-
-
-def _load_config() -> dict:
-    """Load config from ~/.codex/config.toml, fall back to env vars, then defaults."""
-    cfg = dict(_DEFAULTS)
-
-    # Try ~/.codex-mcp/config.toml
-    config_path = Path.home() / ".codex-mcp" / "config.toml"
-    if config_path.exists():
-        try:
-            import tomllib
-        except ModuleNotFoundError:
-            import tomli as tomllib  # type: ignore[no-redef]
-        try:
-            with open(config_path, "rb") as f:
-                toml_cfg = tomllib.load(f)
-            for key in cfg:
-                if key in toml_cfg:
-                    cfg[key] = toml_cfg[key]
-        except Exception:
-            pass  # malformed toml, skip
-
-    # Env vars override toml (only if set)
-    env_map = {
-        "api_base": "OPENAI_API_BASE",
-        "api_key": "OPENAI_API_KEY",
-        "model": "CODEX_MODEL",
-        "system_prompt": "CODEX_SYSTEM_PROMPT",
-    }
-    for key, env_var in env_map.items():
-        val = os.environ.get(env_var)
-        if val:
-            cfg[key] = val
-
-    return cfg
-
-
-_cfg = _load_config()
-API_BASE = _cfg["api_base"]
-API_KEY = _cfg["api_key"]
-DEFAULT_MODEL = _cfg["model"]
-SYSTEM_PROMPT = _cfg["system_prompt"]
 
 mcp = FastMCP("codex")
 
-# Store for async tasks and conversation histories
+# Store for async tasks
 _tasks: dict[str, dict] = {}
-_conversations: dict[str, list] = {}
 
 
-def _get_client() -> AsyncOpenAI:
-    extra_headers = {}
-    # Azure OpenAI requires api-key header
-    if "azure" in API_BASE.lower():
-        extra_headers["api-key"] = API_KEY
-    return AsyncOpenAI(
-        api_key=API_KEY,
-        base_url=API_BASE,
-        default_headers=extra_headers if extra_headers else None,
+def _find_codex() -> str:
+    """Find the codex binary path."""
+    path = shutil.which("codex")
+    if not path:
+        raise FileNotFoundError("codex CLI not found in PATH. Install it first: npm install -g @openai/codex")
+    return path
+
+
+async def _call_codex(prompt: str, model: str | None = None) -> str:
+    """Run `codex exec <prompt>` and return stdout."""
+    codex_bin = _find_codex()
+    cmd = [codex_bin, "exec"]
+    if model:
+        cmd.extend(["-m", model])
+    cmd.append(prompt)
+
+    proc = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
     )
+    stdout, stderr = await proc.communicate()
 
+    if proc.returncode != 0:
+        err_msg = stderr.decode().strip() or f"codex exec exited with code {proc.returncode}"
+        raise RuntimeError(err_msg)
 
-async def _call_codex(prompt: str, model: str, conversation_id: str | None) -> tuple[str, str]:
-    """Call OpenAI and return (response_text, conversation_id)."""
-    client = _get_client()
-
-    if conversation_id and conversation_id in _conversations:
-        messages = _conversations[conversation_id]
-    else:
-        conversation_id = str(uuid.uuid4())[:8]
-        messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-
-    messages.append({"role": "user", "content": prompt})
-
-    response = await client.chat.completions.create(
-        model=model,
-        messages=messages,
-        temperature=0.7,
-    )
-
-    reply = response.choices[0].message.content
-    messages.append({"role": "assistant", "content": reply})
-    _conversations[conversation_id] = messages
-
-    return reply, conversation_id
+    return stdout.decode().strip()
 
 
 @mcp.tool()
-async def codex_exec(prompt: str, model: str = "", conversation_id: str = "") -> str:
+async def codex_exec(prompt: str, model: str = "") -> str:
     """Ask Codex (OpenAI) a question and get a synchronous response.
 
     Args:
         prompt: The question or prompt to send to Codex.
         model: Model to use. Options: "gpt-5.1" (default, strongest), "gpt-4.1" (faster). Leave empty for default.
-        conversation_id: Optional conversation ID to continue a previous discussion. Leave empty for new conversation.
     """
-    use_model = model if model else DEFAULT_MODEL
     try:
-        reply, conv_id = await _call_codex(prompt, use_model, conversation_id or None)
+        reply = await _call_codex(prompt, model or None)
         return json.dumps({
             "status": "success",
-            "model": use_model,
-            "conversation_id": conv_id,
+            "model": model or "(default)",
             "response": reply,
-            "hint": f"Use conversation_id='{conv_id}' to continue this discussion."
         }, ensure_ascii=False, indent=2)
     except Exception as e:
         return json.dumps({"status": "error", "error": str(e)}, ensure_ascii=False, indent=2)
 
 
 @mcp.tool()
-async def codex_async(prompt: str, model: str = "", conversation_id: str = "") -> str:
+async def codex_async(prompt: str, model: str = "") -> str:
     """Submit an async question to Codex. Returns a task_id immediately; use codex_poll to check results later.
 
     Args:
         prompt: The question or prompt to send to Codex.
         model: Model to use. Options: "gpt-5.1" (default), "gpt-4.1" (faster). Leave empty for default.
-        conversation_id: Optional conversation ID to continue a previous discussion.
     """
-    use_model = model if model else DEFAULT_MODEL
     task_id = str(uuid.uuid4())[:8]
     _tasks[task_id] = {
         "status": "running",
         "prompt": prompt,
-        "model": use_model,
+        "model": model or "(default)",
         "submitted_at": datetime.now().isoformat(),
         "result": None,
     }
 
     async def _run():
         try:
-            reply, conv_id = await _call_codex(prompt, use_model, conversation_id or None)
+            reply = await _call_codex(prompt, model or None)
             _tasks[task_id]["status"] = "completed"
             _tasks[task_id]["result"] = reply
-            _tasks[task_id]["conversation_id"] = conv_id
         except Exception as e:
             _tasks[task_id]["status"] = "error"
             _tasks[task_id]["result"] = str(e)
@@ -163,7 +95,7 @@ async def codex_async(prompt: str, model: str = "", conversation_id: str = "") -
     return json.dumps({
         "status": "submitted",
         "task_id": task_id,
-        "model": use_model,
+        "model": model or "(default)",
         "hint": f"Use codex_poll(task_id='{task_id}') to check results."
     }, ensure_ascii=False, indent=2)
 
@@ -187,8 +119,6 @@ async def codex_poll(task_id: str) -> str:
     }
     if task["status"] == "completed":
         result["response"] = task["result"]
-        result["conversation_id"] = task.get("conversation_id", "")
-        result["hint"] = f"Use conversation_id='{result['conversation_id']}' to continue this discussion."
     elif task["status"] == "error":
         result["error"] = task["result"]
 
@@ -208,19 +138,6 @@ async def codex_list_tasks() -> str:
             "submitted_at": t["submitted_at"],
         })
     return json.dumps(summary, ensure_ascii=False, indent=2)
-
-
-@mcp.tool()
-async def codex_conversations() -> str:
-    """List all active conversation IDs and their message counts."""
-    convs = []
-    for cid, msgs in _conversations.items():
-        convs.append({
-            "conversation_id": cid,
-            "message_count": len(msgs),
-            "last_user_msg": next((m["content"][:80] for m in reversed(msgs) if m["role"] == "user"), ""),
-        })
-    return json.dumps(convs, ensure_ascii=False, indent=2)
 
 
 def main():
