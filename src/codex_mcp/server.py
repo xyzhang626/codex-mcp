@@ -6,18 +6,61 @@ import json
 import os
 import uuid
 from datetime import datetime
+from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
 from openai import AsyncOpenAI
 
-# Config via environment variables
-API_BASE = os.environ.get("OPENAI_API_BASE", "https://api.openai.com/v1")
-API_KEY = os.environ.get("OPENAI_API_KEY", "")
-DEFAULT_MODEL = os.environ.get("CODEX_MODEL", "gpt-4.1")
-SYSTEM_PROMPT = os.environ.get(
-    "CODEX_SYSTEM_PROMPT",
-    "You are Codex, a helpful coding assistant. Provide concise, practical advice.",
-)
+# --- Config: ~/.codex/config.toml > env vars > defaults ---
+
+_DEFAULTS = {
+    "api_base": "https://api.openai.com/v1",
+    "api_key": "",
+    "model": "gpt-4.1",
+    "system_prompt": "You are Codex, a helpful coding assistant. Provide concise, practical advice.",
+}
+
+
+def _load_config() -> dict:
+    """Load config from ~/.codex/config.toml, fall back to env vars, then defaults."""
+    cfg = dict(_DEFAULTS)
+
+    # Try ~/.codex-mcp/config.toml
+    config_path = Path.home() / ".codex-mcp" / "config.toml"
+    if config_path.exists():
+        try:
+            import tomllib
+        except ModuleNotFoundError:
+            import tomli as tomllib  # type: ignore[no-redef]
+        try:
+            with open(config_path, "rb") as f:
+                toml_cfg = tomllib.load(f)
+            for key in cfg:
+                if key in toml_cfg:
+                    cfg[key] = toml_cfg[key]
+        except Exception:
+            pass  # malformed toml, skip
+
+    # Env vars override toml (only if set)
+    env_map = {
+        "api_base": "OPENAI_API_BASE",
+        "api_key": "OPENAI_API_KEY",
+        "model": "CODEX_MODEL",
+        "system_prompt": "CODEX_SYSTEM_PROMPT",
+    }
+    for key, env_var in env_map.items():
+        val = os.environ.get(env_var)
+        if val:
+            cfg[key] = val
+
+    return cfg
+
+
+_cfg = _load_config()
+API_BASE = _cfg["api_base"]
+API_KEY = _cfg["api_key"]
+DEFAULT_MODEL = _cfg["model"]
+SYSTEM_PROMPT = _cfg["system_prompt"]
 
 mcp = FastMCP("codex")
 

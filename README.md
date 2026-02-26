@@ -5,29 +5,46 @@ An MCP server that lets you query OpenAI models (Codex) directly from Claude Cod
 ## Quick Install
 
 ```bash
-claude mcp add codex -s user -e OPENAI_API_KEY=sk-xxx -- uvx --from git+https://github.com/xyzhang626/codex-mcp codex-mcp
+claude mcp add codex -s user -- uvx --from git+https://github.com/xyzhang626/codex-mcp codex-mcp
 ```
 
-Then restart Claude Code.
+Then create `~/.codex-mcp/config.toml` with your API credentials and restart Claude Code.
 
-## Environment Variables
+## Configuration
 
-| Variable | Default | Description |
+Config is loaded in this order (later overrides earlier):
+
+1. **`~/.codex-mcp/config.toml`** (recommended)
+2. **Environment variables** (fallback)
+3. **Built-in defaults**
+
+### Config File (`~/.codex-mcp/config.toml`)
+
+```toml
+api_key = "sk-xxx"
+api_base = "https://api.openai.com/v1"
+model = "gpt-4.1"
+# system_prompt = "You are Codex, a helpful coding assistant. Provide concise, practical advice."
+```
+
+#### Azure OpenAI Example
+
+```toml
+api_key = "your-azure-key"
+api_base = "https://your-resource.openai.azure.com/openai/v1"
+model = "gpt-4.1"
+```
+
+### Environment Variables (fallback)
+
+| Variable | Config key | Default |
 |---|---|---|
-| `OPENAI_API_KEY` | (required) | Your OpenAI API key |
-| `OPENAI_API_BASE` | `https://api.openai.com/v1` | API base URL (supports Azure) |
-| `CODEX_MODEL` | `gpt-4.1` | Default model |
-| `CODEX_SYSTEM_PROMPT` | `"You are Codex, a helpful coding assistant..."` | System prompt |
+| `OPENAI_API_KEY` | `api_key` | `""` |
+| `OPENAI_API_BASE` | `api_base` | `https://api.openai.com/v1` |
+| `CODEX_MODEL` | `model` | `gpt-4.1` |
+| `CODEX_SYSTEM_PROMPT` | `system_prompt` | `"You are Codex, a helpful coding assistant..."` |
 
-### Azure OpenAI Example
-
-```bash
-claude mcp add codex -s user \
-  -e OPENAI_API_KEY=your-azure-key \
-  -e OPENAI_API_BASE=https://your-resource.openai.azure.com/openai/v1 \
-  -e CODEX_MODEL=gpt-4.1 \
-  -- uvx --from git+https://github.com/xyzhang626/codex-mcp codex-mcp
-```
+Environment variables override config file values when both are set.
 
 ## Tools
 
