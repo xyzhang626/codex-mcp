@@ -26,7 +26,7 @@ def _find_codex() -> str:
 async def _call_codex(prompt: str, model: str | None = None) -> str:
     """Run `codex exec <prompt>` and return stdout."""
     codex_bin = _find_codex()
-    cmd = [codex_bin, "exec"]
+    cmd = [codex_bin, "exec", "--skip-git-repo-check"]
     if model:
         cmd.extend(["-m", model])
     cmd.append(prompt)
