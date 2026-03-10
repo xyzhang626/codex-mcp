@@ -13,6 +13,14 @@ codex login
 
 ## Quick Install
 
+One-liner that installs the MCP server and the `discuss-with-multi-codex` skill:
+
+```bash
+curl -sSL https://raw.githubusercontent.com/xyzhang626/codex-mcp/main/install.sh | bash
+```
+
+Or manually:
+
 ```bash
 claude mcp add codex -s user -- uvx --from git+https://github.com/xyzhang626/codex-mcp codex-mcp
 ```
@@ -35,8 +43,4 @@ List all async tasks and their statuses.
 
 ## Configuration
 
-Codex CLI uses its own config at `~/.codex/config.toml`. You can override the model per-call:
-
-```
-codex_exec(prompt="How are you?", model="gpt-4.1")
-```
+Codex CLI uses its own config at `~/.codex/config.toml` (model, API keys, etc.).

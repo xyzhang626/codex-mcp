@@ -23,13 +23,10 @@ def _find_codex() -> str:
     return path
 
 
-async def _call_codex(prompt: str, model: str | None = None) -> str:
-    """Run `codex exec <prompt>` and return stdout."""
+async def _call_codex(prompt: str) -> str:
+    """Run `codex exec <prompt>` and return stdout.  Model comes from ~/.codex/config.toml."""
     codex_bin = _find_codex()
-    cmd = [codex_bin, "exec", "--skip-git-repo-check"]
-    if model:
-        cmd.extend(["-m", model])
-    cmd.append(prompt)
+    cmd = [codex_bin, "exec", "--skip-git-repo-check", prompt]
 
     proc = await asyncio.create_subprocess_exec(
         *cmd,
@@ -46,18 +43,16 @@ async def _call_codex(prompt: str, model: str | None = None) -> str:
 
 
 @mcp.tool()
-async def codex_exec(prompt: str, model: str = "") -> str:
+async def codex_exec(prompt: str) -> str:
     """Ask Codex (OpenAI) a question and get a synchronous response.
 
     Args:
         prompt: The question or prompt to send to Codex.
-        model: Model to use. Options: "gpt-5.1" (default, strongest), "gpt-4.1" (faster). Leave empty for default.
     """
     try:
-        reply = await _call_codex(prompt, model or None)
+        reply = await _call_codex(prompt)
         return json.dumps({
             "status": "success",
-            "model": model or "(default)",
             "response": reply,
         }, ensure_ascii=False, indent=2)
     except Exception as e:
@@ -65,25 +60,23 @@ async def codex_exec(prompt: str, model: str = "") -> str:
 
 
 @mcp.tool()
-async def codex_async(prompt: str, model: str = "") -> str:
+async def codex_async(prompt: str) -> str:
     """Submit an async question to Codex. Returns a task_id immediately; use codex_poll to check results later.
 
     Args:
         prompt: The question or prompt to send to Codex.
-        model: Model to use. Options: "gpt-5.1" (default), "gpt-4.1" (faster). Leave empty for default.
     """
     task_id = str(uuid.uuid4())[:8]
     _tasks[task_id] = {
         "status": "running",
         "prompt": prompt,
-        "model": model or "(default)",
         "submitted_at": datetime.now().isoformat(),
         "result": None,
     }
 
     async def _run():
         try:
-            reply = await _call_codex(prompt, model or None)
+            reply = await _call_codex(prompt)
             _tasks[task_id]["status"] = "completed"
             _tasks[task_id]["result"] = reply
         except Exception as e:
@@ -95,7 +88,6 @@ async def codex_async(prompt: str, model: str = "") -> str:
     return json.dumps({
         "status": "submitted",
         "task_id": task_id,
-        "model": model or "(default)",
         "hint": f"Use codex_poll(task_id='{task_id}') to check results."
     }, ensure_ascii=False, indent=2)
 
@@ -114,7 +106,6 @@ async def codex_poll(task_id: str) -> str:
     result = {
         "task_id": task_id,
         "status": task["status"],
-        "model": task["model"],
         "prompt": task["prompt"][:100],
     }
     if task["status"] == "completed":
@@ -133,7 +124,6 @@ async def codex_list_tasks() -> str:
         summary.append({
             "task_id": tid,
             "status": t["status"],
-            "model": t["model"],
             "prompt": t["prompt"][:80],
             "submitted_at": t["submitted_at"],
         })
